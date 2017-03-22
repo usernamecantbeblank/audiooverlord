@@ -2,6 +2,7 @@ var whitelist = new Set();
 whitelist.add("stackoverflow.com");
 
 
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     //mute condition
     if (!changeInfo.url) {
