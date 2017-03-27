@@ -1,12 +1,20 @@
-var whitelist = new Set();
-var mode = "whitelist";
+const whitelist = new Set();
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log("message received", message);
-    const type = message.type;
+const WHITELIST_MUTE_AUDIBLE = "whitelist-audible";
+const WHITELIST_MUTE_ALL = "whitelist"
+const MUTE_ALL = "muteall";
+const DISABLE = "disable";
+
+
+var mode = WHITELIST_MUTE_AUDIBLE;
+
+chrome.runtime.onMessage.addListener(({type, payload}, sender, sendResponse) => {
+    console.log("message received", type, payload);
+
     switch (type) {
         case 'switchMode':
-            console.log("switch request received");
+            console.log("switch request received", payload);
+            switchToMode(payload);
             break;
         case 'whitelist':
             console.log("add to white list request received");
@@ -23,8 +31,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return true;
         case 'getCurrentMode':
             console.log("request sent to get mode status");
-            sendResponse(mode);
+            sendResponse({mode, whitelist});
             return true;
+
 
         default:
             console.log("Unknown message type");
@@ -33,6 +42,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
 });
+
+
+function switchToMode(modeName) {
+    mode = modeName;
+    refreshTabsStates();
+}
 
 function getCurrentTab(callback) {
     chrome.tabs.query({active: true}, tabs => {
@@ -44,23 +59,39 @@ function getCurrentTab(callback) {
     });
 }
 
-chrome.storage.local.get(itemsObject => {
+chrome.storage.sync.get(itemsObject => {
     Object.keys(itemsObject).forEach(domain => {
         whitelist.add(domain);
     });
     refreshTabsStates();
 });
 
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "sync") {
+        return;
+    }
+    Object.keys(changes).forEach(domain => {
+        const storageChange = changes[key];
+        if (!storageChange || !storageChange.newValue) {
+            whitelist.delete(domain);
+            return
+        }
+        whitelist.add(domain);
+    });
+
+
+});
+
 
 function switchToWhitelist(tab) {
-    var url = tab.url;
-    var domain = extractNormalizedDomain(url);
+    const url = tab.url;
+    const domain = extractNormalizedDomain(url);
     if (!whitelist.has(domain)) {
         whitelist.add(domain);
-        chrome.storage.local.set({[domain]: true});
+        chrome.storage.sync.set({[domain]: true});
     } else {
         whitelist.delete(domain);
-        chrome.storage.local.remove(domain);
+        chrome.storage.sync.remove(domain);
     }
     refreshTabsStates();
 }
@@ -90,11 +121,22 @@ function extractNormalizedDomain(url) {
 }
 
 function shouldTabBeMuted(tab) {
-    if (tab.audible === false) {
+    if (tab.mutedInfo &&
+        tab.mutedInfo.muted
+        && tab.mutedInfo.extensionId !== chrome.runtime.id
+    ) {
         return null;
     }
 
-    if (isWhitelisted(extractNormalizedDomain(tab.url))) {
+
+    if (mode === MUTE_ALL) {
+        return true;
+    }
+
+
+    if (tab.audible === false && mode === WHITELIST_MUTE_AUDIBLE ||
+        mode === DISABLE ||
+        isWhitelisted(extractNormalizedDomain(tab.url))) {
         if (tab.mutedInfo &&
             tab.mutedInfo.muted
             && tab.mutedInfo.extensionId === chrome.runtime.id
@@ -112,11 +154,9 @@ function shouldTabBeMuted(tab) {
 
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    //mute condition
     if (!changeInfo.audible) {
         return;
     }
-
 
     let mute = shouldTabBeMuted(tab);
 
